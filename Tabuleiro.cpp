@@ -1,4 +1,5 @@
 #include "Tabuleiro.h"
+#include <algorithm>
 #include <sstream>
 #include <cctype>
 
@@ -195,13 +196,12 @@ void Tabuleiro::calcularMovimentosRainha(int l, int c, std::vector<Lance>& lista
 }
 void Tabuleiro::calcularMovimentosRei(int l, int c, std::vector<Lance>& lista) {
     char minhaPeca = matriz[l][c];
-    char minhaCor = obterCorPeca(minhaPeca);
+    char cor = obterCorPeca(minhaPeca);
 
-    // As 8 direções possíveis para o Rei (iguais às da Dama)
+    // --- 1. LANCES NORMAIS DO REI (1 passo em 8 direções) ---
     int dirLinha[8] = { -1,  1,  0,  0, -1, -1,  1,  1 };
     int dirColuna[8] = { 0,  0, -1,  1, -1,  1, -1,  1 };
 
-    // O Rei só dá 1 passo, então usamos apenas um 'if', sem o 'while'
     for (int i = 0; i < 8; i++) {
         int destinoLinha = l + dirLinha[i];
         int destinoColuna = c + dirColuna[i];
@@ -210,16 +210,92 @@ void Tabuleiro::calcularMovimentosRei(int l, int c, std::vector<Lance>& lista) {
             char pecaDestino = matriz[destinoLinha][destinoColuna];
             char corDestino = obterCorPeca(pecaDestino);
 
-            // O Rei pode mover-se se a casa estiver vazia ('.') ou se for um inimigo.
-            // A nossa função 'obterCorPeca' garante que '.' é diferente de 'w' e 'b'.
-            if (corDestino != minhaCor) {
+            // Pode mover-se se a casa estiver vazia ou se tiver uma peça inimiga
+            if (corDestino != cor) {
                 Lance novoLance(l, c, destinoLinha, destinoColuna, minhaPeca, pecaDestino);
                 lista.push_back(novoLance);
             }
         }
     }
-} 
-//Rei sem roque
+
+    // --- 2. LÓGICA DE ROQUE (Padrão e Xadrez 960) ---
+    // Regra 1: Não pode fazer roque se já estiver em xeque!
+    if (reiEmXeque(cor)) return;
+
+    bool direitoPequeno = (cor == 'w') ? estado.roqueBrancoRei : estado.roquePretoRei;
+    bool direitoGrande = (cor == 'w') ? estado.roqueBrancoRainha : estado.roquePretoRainha;
+
+    // Destinos fixos do xadrez (mesmo no 960 o Rei e a Torre acabam sempre nestas colunas)
+    int cFinalReiPequeno = 6;   // Coluna 'g'
+    int cFinalTorrePequeno = 5; // Coluna 'f'
+    int cFinalReiGrande = 2;    // Coluna 'c'
+    int cFinalTorreGrande = 3;  // Coluna 'd'
+
+    // Varre a linha do Rei procurando as Torres aliadas
+    for (int cT = 0; cT < 8; cT++) {
+        char peca = matriz[l][cT];
+
+        // Se não for uma torre da mesma cor, ignora
+        if (tolower(peca) != 'r' || obterCorPeca(peca) != cor) continue;
+
+        bool ehRoquePequeno = (cT > c); // Torre está à direita do Rei
+        bool ehRoqueGrande = (cT < c);  // Torre está à esquerda do Rei
+
+        if (ehRoquePequeno && !direitoPequeno) continue;
+        if (ehRoqueGrande && !direitoGrande) continue;
+
+        int cDestRei = ehRoquePequeno ? cFinalReiPequeno : cFinalReiGrande;
+        int cDestTorre = ehRoquePequeno ? cFinalTorrePequeno : cFinalTorreGrande;
+
+        // Passo A: Checar se o caminho entre o Rei e a Torre está livre de outras peças
+        bool caminhoLivre = true;
+        int minC = std::min(c, cT);
+        int maxC = std::max(c, cT);
+
+        // Mudamos a variável para 'col' para não dar conflito com o parâmetro 'c'
+        for (int col = minC + 1; col < maxC; col++) {
+            if (matriz[l][col] != '.') caminhoLivre = false;
+        }
+
+        if (caminhoLivre) {
+            // Passo B: Checar se as casas finais de destino estão livres 
+            // (Ignoramos se o destino for a própria casa atual do Rei ou da Torre, comum no 960)
+            bool destinoLivre = true;
+            if (matriz[l][cDestRei] != '.' && cDestRei != c && cDestRei != cT) destinoLivre = false;
+            if (matriz[l][cDestTorre] != '.' && cDestTorre != c && cDestTorre != cT) destinoLivre = false;
+
+            if (destinoLivre) {
+                // Passo C: Regra de Ouro - As casas por onde o Rei passa NÃO podem estar sob ataque (xeque)
+                bool casasSeguras = true;
+                int passoC = (cDestRei > c) ? 1 : -1;
+                int cAtual = c;
+
+                while (cAtual != cDestRei) {
+                    cAtual += passoC;
+
+                    // FAKE MOVE: Move o rei temporariamente na matriz para testar o xeque nessa casa
+                    char pecaDestAntiga = matriz[l][cAtual];
+                    matriz[l][cAtual] = matriz[l][c];
+                    matriz[l][c] = '.';
+
+                    if (reiEmXeque(cor)) casasSeguras = false;
+
+                    // DESFAZ O FAKE MOVE (devolve o rei ao lugar original)
+                    matriz[l][c] = matriz[l][cAtual];
+                    matriz[l][cAtual] = pecaDestAntiga;
+
+                    if (!casasSeguras) break; // Se foi atacado, nem precisa testar o resto do caminho
+                }
+
+                if (casasSeguras) {
+                    // LANCE DE ROQUE VÁLIDO! 
+                    Lance lanceRoque(l, c, l, cT, minhaPeca, peca, true, false, '.');
+                    lista.push_back(lanceRoque);
+                }
+            }
+        }
+    }
+}
 
 bool Tabuleiro::casaEstaAtacada(int l, int c, char corAtacante) {
     // 1. Ameaças de PEÃO
@@ -298,27 +374,56 @@ bool Tabuleiro::reiEmXeque(char corRei) {
 }
 
 void Tabuleiro::fazerLanceInterno(const Lance& lance) {
-    // 1. Salvar o estado atual (a nossa "fotografia" de regras invisíveis)
+    // 1. Salvar o estado atual (a "fotografia" invisível)
     historicoEstados.push_back(estado);
 
-    // 2. Mover a peça na matriz principal
-    matriz[lance.linDestino][lance.colDestino] = lance.pecaMovida;
-    matriz[lance.linOrigem][lance.colOrigem] = '.'; // A casa de onde saímos fica vazia
+    // 2. Executar o movimento na matriz
+    if (lance.ehRoque) {
+        bool ehRoquePequeno = (lance.colDestino > lance.colOrigem);
+        int cFinalRei = ehRoquePequeno ? 6 : 2;
+        int cFinalTorre = ehRoquePequeno ? 5 : 3;
 
-    // 3. Lidar com a captura especial do En Passant
-    if (lance.ehEnPassant) {
-        // No En Passant, o peão capturado não estava na casa de destino,
-        // ele estava ao lado do nosso peão (na linha de origem e coluna de destino).
-        matriz[lance.linOrigem][lance.colDestino] = '.';
+        // Limpa as posições originais PRIMEIRO (essencial para o Xadrez 960)
+        matriz[lance.linOrigem][lance.colOrigem] = '.';
+        matriz[lance.linDestino][lance.colDestino] = '.';
+
+        // Coloca Rei e Torre nos destinos finais do Roque
+        matriz[lance.linOrigem][cFinalRei] = lance.pecaMovida;      // Rei
+        matriz[lance.linOrigem][cFinalTorre] = lance.pecaCapturada; // Torre
+    }
+    else {
+        // Movimento normal ou Captura
+        matriz[lance.linDestino][lance.colDestino] = lance.pecaMovida;
+        matriz[lance.linOrigem][lance.colOrigem] = '.';
+
+        // Lidar com a captura especial do En Passant
+        if (lance.ehEnPassant) {
+            matriz[lance.linOrigem][lance.colDestino] = '.'; // Remove o peão inimigo ao lado
+        }
     }
 
-    // 4. Atualizar o Estado para o PRÓXIMO turno
-    estado.colunaEnPassant = -1; // Por padrão, o en passant desaparece no turno seguinte
-
-    // Mas, se este lance foi um Peão a dar um salto duplo, ativamos o en passant para o adversário!
+    // 3. Atualizar o Estado: En Passant
+    estado.colunaEnPassant = -1; // Desaparece por padrão
     if ((lance.pecaMovida == 'P' || lance.pecaMovida == 'p') && abs(lance.linDestino - lance.linOrigem) == 2) {
-        estado.colunaEnPassant = lance.colOrigem;
+        estado.colunaEnPassant = lance.colOrigem; // Ativa se andou duas casas
     }
+
+    // 4. Atualizar o Estado: Direitos de Roque
+    // Se o Rei se mover, perde ambos os direitos de roque
+    if (lance.pecaMovida == 'K') { estado.roqueBrancoRei = false; estado.roqueBrancoRainha = false; }
+    if (lance.pecaMovida == 'k') { estado.roquePretoRei = false; estado.roquePretoRainha = false; }
+
+    // Se uma torre se mover (ou for capturada nos seus cantos originais), perde esse lado específico
+    // (Avalia as 4 quinas do tabuleiro padrão para revogar direitos)
+    if (lance.linOrigem == 7 && lance.colOrigem == 7) estado.roqueBrancoRei = false;
+    if (lance.linOrigem == 7 && lance.colOrigem == 0) estado.roqueBrancoRainha = false;
+    if (lance.linOrigem == 0 && lance.colOrigem == 7) estado.roquePretoRei = false;
+    if (lance.linOrigem == 0 && lance.colOrigem == 0) estado.roquePretoRainha = false;
+
+    if (lance.linDestino == 7 && lance.colDestino == 7) estado.roqueBrancoRei = false;
+    if (lance.linDestino == 7 && lance.colDestino == 0) estado.roqueBrancoRainha = false;
+    if (lance.linDestino == 0 && lance.colDestino == 7) estado.roquePretoRei = false;
+    if (lance.linDestino == 0 && lance.colDestino == 0) estado.roquePretoRainha = false;
 
     // 5. Trocar o turno
     turnoAtual = (turnoAtual == 'w') ? 'b' : 'w';
@@ -327,25 +432,41 @@ void Tabuleiro::desfazerLanceInterno(const Lance& lance) {
     // 1. Destrocar o turno
     turnoAtual = (turnoAtual == 'w') ? 'b' : 'w';
 
-    // 2. Voltar o estado invisível para a "fotografia" anterior
-    estado = historicoEstados.back();
-    historicoEstados.pop_back();
+    // 2. Restaurar a matriz
+    if (lance.ehRoque) {
+        bool ehRoquePequeno = (lance.colDestino > lance.colOrigem);
+        int cFinalRei = ehRoquePequeno ? 6 : 2;
+        int cFinalTorre = ehRoquePequeno ? 5 : 3;
 
-    // 3. Devolver a peça movida à origem
-    matriz[lance.linOrigem][lance.colOrigem] = lance.pecaMovida;
+        // Limpa as posições onde eles pararam no roque
+        matriz[lance.linOrigem][cFinalRei] = '.';
+        matriz[lance.linOrigem][cFinalTorre] = '.';
 
-    // 4. Restaurar a casa de destino
-    if (lance.ehEnPassant) {
-        // Se foi En Passant, a casa de destino volta a ficar vazia...
-        matriz[lance.linDestino][lance.colDestino] = '.';
-        // ...e o peão capturado ressuscita ao lado de onde estávamos!
-        matriz[lance.linOrigem][lance.colDestino] = lance.pecaCapturada;
-
+        // Restaura o Rei e a Torre às posições originais
+        matriz[lance.linOrigem][lance.colOrigem] = lance.pecaMovida;
+        matriz[lance.linDestino][lance.colDestino] = lance.pecaCapturada; // No roque, 'pecaCapturada' armazena a Torre
     }
     else {
-        // Numa captura normal (ou lance para casa vazia), basta colocar de volta o que lá estava
+        // Devolver a peça movida à origem
+        matriz[lance.linOrigem][lance.colOrigem] = lance.pecaMovida;
+
+        // Devolver a peça capturada ao destino (se não comeu nada, devolve o '.')
         matriz[lance.linDestino][lance.colDestino] = lance.pecaCapturada;
+
+        // CORREÇÃO DO EN PASSANT: Ressuscita o peão inimigo no lugar certo
+        if (lance.ehEnPassant) {
+            // A casa de destino real volta a ficar vazia
+            matriz[lance.linDestino][lance.colDestino] = '.';
+
+            // O peão inimigo reaparece na linha de origem do nosso peão, mas na coluna de destino
+            char peaoInimigo = (obterCorPeca(lance.pecaMovida) == 'w') ? 'p' : 'P';
+            matriz[lance.linOrigem][lance.colDestino] = peaoInimigo;
+        }
     }
+
+    // 3. Voltar o estado invisível para a "fotografia" anterior
+    estado = historicoEstados.back();
+    historicoEstados.pop_back();
 }
 
 Tabuleiro::Tabuleiro() {

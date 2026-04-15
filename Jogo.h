@@ -3,19 +3,96 @@
 #include "Simulacao.h"
 #include <iostream>
 #include <string>
+#include <vector>
 
+// 1. PRIMEIRO: Definimos o Nó
+struct NoHistorico {
+    std::string fen;         // O estado do tabuleiro NESTE momento
+    std::string lanceUCI;    // O lance que FOI FEITO para chegar a este FEN (ex: "e2e4")
+    std::string lanceSAN;    // O lance legível que FOI FEITO (ex: "e4")
+
+    NoHistorico* proximo;
+    NoHistorico* anterior;
+
+    NoHistorico(std::string f, std::string uci = "", std::string san = "") {
+        fen = f;
+        lanceUCI = uci;
+        lanceSAN = san;
+        proximo = nullptr;
+        anterior = nullptr;
+    }
+};
+
+// 2. SEGUNDO: Definimos a Lista (com o erro do copy-paste resolvido)
+class ListaPartida {
+public:
+    NoHistorico* cabeca;
+    NoHistorico* atual;
+
+    ListaPartida() : cabeca(nullptr), atual(nullptr) {}
+
+    ~ListaPartida() {
+        limparHistorico();
+    }
+
+    void limparHistorico() {
+        NoHistorico* temp = cabeca;
+        while (temp != nullptr) {
+            NoHistorico* apagar = temp;
+            temp = temp->proximo;
+            delete apagar;
+        }
+        cabeca = nullptr;
+        atual = nullptr;
+    }
+
+    void adicionarEstado(const std::string& novaFen, const std::string& uci, const std::string& san) {
+        NoHistorico* novo = new NoHistorico(novaFen, uci, san);
+
+        if (!cabeca) {
+            cabeca = novo;
+            atual = cabeca;
+        }
+        else if (novaFen == atual->fen) {
+            NoHistorico* aux = atual;
+
+            if (aux->anterior != nullptr) {
+                aux->anterior->proximo = novo;
+            }
+            else {
+                cabeca = novo;
+            }
+
+            novo->anterior = aux->anterior;
+            atual = novo;
+            delete aux;
+        }
+        else {
+            atual->proximo = novo;
+            novo->anterior = atual;
+            atual = novo;
+        }
+    }
+};
+
+// 3. TERCEIRO: Definimos o Jogo (Agora o compilador já sabe o que é a ListaPartida!)
 class Jogo {
 private:
     Tabuleiro tabuleiroJogo;
+    ListaPartida histLances;
     char tabuleiroBinario[64];
     char selecP[2];
     char movP[2];
 
 public:
     Jogo() {
-        while (1) { //ne2e4e7e5d1h5a7a6f1c4a6a5h5f7
+        while (1) {
             system("clear");
             pergunta();
+
+            histLances.limparHistorico();
+            histLances.adicionarEstado(tabuleiroJogo.obterFEN(), "", "");
+
             gameLoop();
         }
     }
@@ -27,10 +104,11 @@ public:
 
             bool turnoFinalizado = false;
 
-            // Fica preso neste loop até o jogador realmente executar um lance válido
             while (!turnoFinalizado) {
 
-                // 1. Mostra o tabuleiro normal (sem lances)
+                std::string fenAntiga = tabuleiroJogo.obterFEN();
+
+                // 1. Mostra o tabuleiro normal 
                 atualizarMapa(false);
                 Simulacao::atualizarTabuleiro(tabuleiroBinario);
 
@@ -40,7 +118,7 @@ public:
                     Simulacao::selecionarPeca(selecP);
                 } while (!tabuleiroJogo.preLance(selecP));
 
-                // 3. Mostra o tabuleiro com as opções de movimento marcadas com '2'
+                // 3. Mostra o tabuleiro com as opções
                 std::cout << "\nOpcoes de movimento:\n";
                 atualizarMapa(true);
                 Simulacao::atualizarTabuleiro(tabuleiroBinario);
@@ -51,24 +129,47 @@ public:
                     std::cout << "Escolha o destino (ou a mesma casa para cancelar): ";
                     Simulacao::lerMovimento(movP);
 
-                    // Verifica se o jogador escolheu a mesma casa da origem (Cancelar!)
                     if (movP[0] == selecP[0] && movP[1] == selecP[1]) {
                         std::cout << "Selecao cancelada!\n";
                         tabuleiroJogo.cancelarSelecao();
-                        aguardandoDestino = false; // Sai do loop de destino
-                        // Como turnoFinalizado continua false, ele vai voltar a pedir uma nova peça!
+                        aguardandoDestino = false;
                     }
                     else {
                         // Tenta executar o lance
                         if (tabuleiroJogo.executarLance(movP)) {
-                            aguardandoDestino = false; // Sai do loop de destino
-                            turnoFinalizado = true;    // Sai do loop do turno (Passa a vez!)
+                            aguardandoDestino = false;
+                            turnoFinalizado = true;
+
+                            // GERAÇÃO DE PGN APÓS LANCE DE SUCESSO:
+                            std::string fenNova = tabuleiroJogo.obterFEN();
+                            std::string textoLances = decodificarLanceEntreFens(fenAntiga, fenNova);
+                            std::string uci = "";
+                            std::string san = "";
+
+                            size_t posEspaco = textoLances.find(' ');
+                            if (posEspaco != std::string::npos) {
+                                uci = textoLances.substr(0, posEspaco);
+                                san = textoLances.substr(posEspaco + 1);
+                            }
+                            if (tabuleiroJogo.ehXequeMate(tabuleiroJogo.getTurno())) {
+                                san += "#";
+                            }
+                            else if (tabuleiroJogo.reiEmXeque(tabuleiroJogo.getTurno())) {
+                                san += "+";
+                            }
+                            histLances.adicionarEstado(fenNova, uci, san);
+
+                            // Imprime PGN atualizado
+                            std::cout << std::endl;
+                            imprimirPGN(histLances, histLances.cabeca->fen);
                         }
-                        /* else {
+                        else {
                             std::cout << "Movimento invalido. Tente novamente.\n";
-                        }*/
+                        }
                     }
                 } while (aguardandoDestino);
+
+                // Checagens de Fim de Jogo
                 if (tabuleiroJogo.ehXequeMate(tabuleiroJogo.getTurno())) {
                     atualizarMapa(false);
                     Simulacao::atualizarTabuleiro(tabuleiroBinario);
@@ -87,31 +188,220 @@ public:
         }
     }
 
-    // Função única que constrói o array binário que a Simulacao.h gosta
     void atualizarMapa(bool mostrarLances) {
         for (int i = 0; i < 8; i++) {
             for (int j = 0; j < 8; j++) {
-
                 if (mostrarLances && tabuleiroJogo.ehCasaSelecionada(i, j)) {
                     tabuleiroBinario[i * 8 + j] = '4';
                 }
                 else if (mostrarLances && tabuleiroJogo.ehCasaCaptura(i, j)) {
-                    tabuleiroBinario[i * 8 + j] = '3'; 
+                    tabuleiroBinario[i * 8 + j] = '3';
                 }
                 else if (mostrarLances && tabuleiroJogo.ehCasaDestinoValida(i, j)) {
-                    tabuleiroBinario[i * 8 + j] = '2'; 
+                    tabuleiroBinario[i * 8 + j] = '2';
                 }
                 else {
                     char peca = tabuleiroJogo.obterPeca(i, j);
                     if (tabuleiroJogo.obterCorPeca(peca) != '.') {
-                        tabuleiroBinario[i * 8 + j] = '1'; 
+                        tabuleiroBinario[i * 8 + j] = '1';
                     }
                     else {
-                        tabuleiroBinario[i * 8 + j] = '0'; // 0: Vazio
+                        tabuleiroBinario[i * 8 + j] = '0';
                     }
                 }
             }
         }
+    }
+
+    std::vector<std::string> expandirMatrizFen(const std::string& fen) {
+        std::vector<std::string> matriz(8, "........");
+        int l = 0, c = 0;
+        for (char ch : fen) {
+            if (ch == ' ') break;
+            if (ch == '/') {
+                l++; c = 0;
+            }
+            else if (isdigit(ch)) {
+                c += (ch - '0');
+            }
+            else {
+                matriz[l][c] = ch;
+                c++;
+            }
+        }
+        return matriz;
+    }
+
+    /*
+    [FEN "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"]
+
+    1. e3 a5 2. Qh5 Ra6 3. Qxa5 h5 4. h4 Rh6 5. Qxc7 f6 6. Qxd7+ Kf7 7. Qxb7 Qd3 8. Qxb8 Qh7 9. Qxc8 Kg6
+    PGN error: Can't play Rh6 at move 4, ply 8 no lichess pega outra partida melhor
+    Movendo a torre no lichess fica assim: 1. e3 a5 2. Qh5 Ra6 3. Qxa5 h5 4. h4 Rhh6; Você errou a lógica dos lances
+    */
+    // Função auxiliar de "Visão de Raio-X" para desambiguação de lances
+    bool podeAlcancar(const std::vector<std::string>& b, int lO, int cO, int lD, int cD, char peca) {
+        char p = tolower(peca);
+        int dl = abs(lO - lD);
+        int dc = abs(cO - cD);
+
+        // Caminho do Cavalo
+        if (p == 'n') return (dl == 2 && dc == 1) || (dl == 1 && dc == 2);
+
+        // Caminho da Torre (ou Rainha em linha reta)
+        if (p == 'r' || p == 'q') {
+            if (lO == lD) {
+                int step = (cD > cO) ? 1 : -1;
+                for (int c = cO + step; c != cD; c += step) if (b[lO][c] != '.') return false;
+                return true;
+            }
+            if (cO == cD) {
+                int step = (lD > lO) ? 1 : -1;
+                for (int l = lO + step; l != lD; l += step) if (b[l][cO] != '.') return false;
+                return true;
+            }
+        }
+        // Caminho do Bispo (ou Rainha em diagonal)
+        if (p == 'b' || p == 'q') {
+            if (dl == dc && dl > 0) {
+                int stepL = (lD > lO) ? 1 : -1;
+                int stepC = (cD > cO) ? 1 : -1;
+                int l = lO + stepL, c = cO + stepC;
+                while (l != lD && c != cD) {
+                    if (b[l][c] != '.') return false;
+                    l += stepL; c += stepC;
+                }
+                return true;
+            }
+        }
+        return false;
+    }
+
+    std::string decodificarLanceEntreFens(const std::string& fenAntiga, const std::string& fenNova) {
+        std::vector<std::string> bAntigo = expandirMatrizFen(fenAntiga);
+        std::vector<std::string> bNovo = expandirMatrizFen(fenNova);
+
+        struct Mudanca { int l, c; char antes, depois; };
+        std::vector<Mudanca> mudancas;
+
+        for (int l = 0; l < 8; l++) {
+            for (int c = 0; c < 8; c++) {
+                if (bAntigo[l][c] != bNovo[l][c]) {
+                    mudancas.push_back({ l, c, bAntigo[l][c], bNovo[l][c] });
+                }
+            }
+        }
+
+        if (mudancas.empty()) return "NULL NULL";
+
+        int lOrigem = -1, cOrigem = -1, lDest = -1, cDest = -1;
+        char pecaMovida = '.', pecaCapturada = '.';
+
+        if (mudancas.size() == 4) {
+            bool ehBrancas = false;
+            bool roquePequeno = false;
+            for (auto& m : mudancas) {
+                if (m.antes == 'K') { ehBrancas = true; roquePequeno = (m.c > 4); }
+                if (m.antes == 'k') { ehBrancas = false; roquePequeno = (m.c > 4); }
+            }
+            std::string uci = ehBrancas ? (roquePequeno ? "e1g1" : "e1c1") : (roquePequeno ? "e8g8" : "e8c8");
+            std::string san = roquePequeno ? "O-O" : "O-O-O";
+            return uci + " " + san;
+        }
+
+        for (auto& m : mudancas) {
+            if (m.antes != '.' && m.depois == '.') {
+                bool ehMinhaOrigem = false;
+                for (auto& dest : mudancas) {
+                    if (dest.depois == m.antes || tolower(dest.depois) == tolower(m.antes)) ehMinhaOrigem = true;
+                }
+                if (ehMinhaOrigem) { lOrigem = m.l; cOrigem = m.c; pecaMovida = m.antes; }
+            }
+            if (m.antes != m.depois && m.depois != '.') {
+                lDest = m.l; cDest = m.c;
+                pecaCapturada = m.antes;
+            }
+        }
+
+        char colO = 'a' + cOrigem;  char linO = '8' - lOrigem;
+        char colD = 'a' + cDest;    char linD = '8' - lDest;
+
+        std::string uci = "";
+        uci += colO; uci += linO; uci += colD; uci += linD;
+
+        if (tolower(pecaMovida) == 'p' && (lDest == 0 || lDest == 7)) {
+            uci += tolower(bNovo[lDest][cDest]);
+        }
+
+        // --- NOVA LÓGICA DE DESAMBIGUAÇÃO (A Correção!) ---
+        bool conflitoColuna = false;
+        bool conflitoLinha = false;
+        char tipoPeca = toupper(pecaMovida);
+
+        if (tipoPeca != 'P' && tipoPeca != 'K') {
+            for (int l = 0; l < 8; l++) {
+                for (int c = 0; c < 8; c++) {
+                    // Se achar uma peça idêntica (mesma letra/cor) noutra casa...
+                    if ((l != lOrigem || c != cOrigem) && bAntigo[l][c] == pecaMovida) {
+                        // ...testa se ela também podia ter ido para a casa de destino
+                        if (podeAlcancar(bAntigo, l, c, lDest, cDest, pecaMovida)) {
+                            if (c == cOrigem) {
+                                conflitoLinha = true; // Mesma coluna, difere pela linha (ex: R1h6)
+                            }
+                            else {
+                                conflitoColuna = true; // Colunas diferentes, difere pela coluna (ex: Rah6)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        std::string san = "";
+        bool captura = (pecaCapturada != '.' || mudancas.size() == 3);
+
+        if (tipoPeca != 'P') {
+            san += tipoPeca;
+            // Aplica a letra ou número extra para o Lichess não reclamar
+            if (conflitoColuna) san += colO;
+            else if (conflitoLinha) san += linO;
+
+            if (captura) san += "x";
+        }
+        else {
+            if (captura) {
+                san += colO;
+                san += "x";
+            }
+        }
+
+        san += colD;
+        san += linD;
+
+        return uci + " " + san;
+    }
+
+    void imprimirPGN(ListaPartida& historico, const std::string& fenInicial) {
+        std::cout << "[FEN \"" << fenInicial << "\"]\n\n";
+
+        NoHistorico* temp = historico.cabeca;
+        if (temp != nullptr) temp = temp->proximo; // Pula o estado inicial
+
+        int numeroTurno = 1;
+        bool turnoBrancas = true;
+
+        while (temp != nullptr) {
+            if (turnoBrancas) {
+                std::cout << numeroTurno << ". " << temp->lanceSAN << " ";
+            }
+            else {
+                std::cout << temp->lanceSAN << " ";
+                numeroTurno++;
+            }
+            turnoBrancas = !turnoBrancas;
+            temp = temp->proximo;
+        }
+        std::cout << "\n" << std::endl;
     }
 
     void pergunta() {
@@ -125,6 +415,8 @@ public:
             std::getline(std::cin, fen);
             tabuleiroJogo.carregarFEN(fen);
         }
-        else tabuleiroJogo.carregarFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        else {
+            tabuleiroJogo.carregarFEN("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        }
     }
 };

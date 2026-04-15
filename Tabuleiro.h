@@ -61,8 +61,7 @@ private:
     // Retorna true se a casa (l, c) está na mira de alguma peça da 'corAtacante'
     bool casaEstaAtacada(int l, int c, char corAtacante);
 
-    // Procura onde está o rei da cor informada e usa a função acima
-    bool reiEmXeque(char corRei);
+    
 
 public:
     Tabuleiro();
@@ -76,6 +75,8 @@ public:
     // É aqui que ele gera os "burros", FAZ o lance, testa se deu xeque, e DESFAZ.
     std::vector<Lance> obterMovimentosLegaisDaPeca(int linha, int coluna);
 
+    // Procura onde está o rei da cor informada e usa a função acima
+    bool reiEmXeque(char corRei);
     // --- 5. FIM DE JOGO ---
     bool semLances(char cor);
     bool ehXequeMate(char cor);
