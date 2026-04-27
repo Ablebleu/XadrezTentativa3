@@ -60,6 +60,16 @@ void Tabuleiro::calcularMovimentosPeao(int l, int c, std::vector<Lance>& lista) 
             }
         }
     }
+    /*if (posicaoValida(linhaFrente, c) && matriz[linhaFrente][c] == '.') {
+        if (linhaFrente == 0 || linhaFrente == 7) {
+            // Se chegar ao fim, cria o lance com a promoção para Dama ('Q')
+            char pecaProm = (minhaCor == 'w') ? 'Q' : 'q';
+            lista.push_back(Lance(l, c, linhaFrente, c, minhaPeca, '.', false, false, pecaProm));
+        }
+        else {
+            lista.push_back(Lance(l, c, linhaFrente, c, minhaPeca, '.'));
+        }
+    }*/
 }
 void Tabuleiro::calcularMovimentosCavalo(int l, int c, std::vector<Lance>& lista) {
     char minhaPeca = matriz[l][c];

@@ -284,6 +284,7 @@ public:
         struct Mudanca { int l, c; char antes, depois; };
         std::vector<Mudanca> mudancas;
 
+        // 1. Encontra todas as casas que sofreram alterações
         for (int l = 0; l < 8; l++) {
             for (int c = 0; c < 8; c++) {
                 if (bAntigo[l][c] != bNovo[l][c]) {
@@ -294,46 +295,83 @@ public:
 
         if (mudancas.empty()) return "NULL NULL";
 
-        int lOrigem = -1, cOrigem = -1, lDest = -1, cDest = -1;
-        char pecaMovida = '.', pecaCapturada = '.';
+        // De quem é a vez? (Lemos o 'w' ou 'b' diretamente da FEN antiga)
+        bool turnoBrancas = (fenAntiga.find(" w ") != std::string::npos);
+        char rei = turnoBrancas ? 'K' : 'k';
+        char torre = turnoBrancas ? 'R' : 'r';
 
-        if (mudancas.size() == 4) {
-            bool ehBrancas = false;
-            bool roquePequeno = false;
-            for (auto& m : mudancas) {
-                if (m.antes == 'K') { ehBrancas = true; roquePequeno = (m.c > 4); }
-                if (m.antes == 'k') { ehBrancas = false; roquePequeno = (m.c > 4); }
+        // --- 1. DETECÇÃO DE ROQUE UNIVERSAL (CLÁSSICO E 960) ---
+        bool reiMudou = false;
+        bool torreMudou = false;
+        int cOrigemRei = -1, cOrigemTorre = -1, lRei = -1;
+
+        // Procura se o nosso Rei e a nossa Torre saíram das suas casas originais
+        for (auto& m : mudancas) {
+            if (m.antes == rei) { reiMudou = true; cOrigemRei = m.c; lRei = m.l; }
+            if (m.antes == torre) { torreMudou = true; cOrigemTorre = m.c; }
+        }
+
+        // Se ambos saíram de suas posições ao mesmo tempo, é Roque!
+        if (reiMudou && torreMudou && lRei != -1) {
+            // Se a torre estava à direita do rei, é roque curto. Se estava à esquerda, é longo.
+            bool roqueCurto = (cOrigemTorre > cOrigemRei);
+
+            char colO = 'a' + cOrigemRei;
+            char linO = '8' - lRei;
+
+            // Xadrez Clássico UCI: Rei vai para a casa final ('g' ou 'c').
+            char colD = roqueCurto ? 'g' : 'c';
+
+            // Xadrez 960 UCI: O formato oficial manda o Rei "capturar" a Torre (ex: b1a1).
+            // Se o Rei não estava na casa normal 'e' (coluna 4), usamos o UCI do 960.
+            if (cOrigemRei != 4) {
+                colD = 'a' + cOrigemTorre;
             }
-            std::string uci = ehBrancas ? (roquePequeno ? "e1g1" : "e1c1") : (roquePequeno ? "e8g8" : "e8c8");
-            std::string san = roquePequeno ? "O-O" : "O-O-O";
+
+            std::string uci = "";
+            uci += colO; uci += linO; uci += colD; uci += linO;
+
+            std::string san = roqueCurto ? "O-O" : "O-O-O";
             return uci + " " + san;
         }
 
+        // --- 2. LANCES NORMAIS, CAPTURAS E EN PASSANT ---
+        int lOrigem = -1, cOrigem = -1, lDest = -1, cDest = -1;
+        char pecaMovida = '.', pecaCapturada = '.';
+
+        // Procura elegantemente qual peça nossa desapareceu (Origem) e onde ela apareceu (Destino)
         for (auto& m : mudancas) {
-            if (m.antes != '.' && m.depois == '.') {
-                bool ehMinhaOrigem = false;
-                for (auto& dest : mudancas) {
-                    if (dest.depois == m.antes || tolower(dest.depois) == tolower(m.antes)) ehMinhaOrigem = true;
-                }
-                if (ehMinhaOrigem) { lOrigem = m.l; cOrigem = m.c; pecaMovida = m.antes; }
+            bool eraMinha = (turnoBrancas && isupper(m.antes)) || (!turnoBrancas && islower(m.antes));
+            bool ehMinhaAgora = (turnoBrancas && isupper(m.depois)) || (!turnoBrancas && islower(m.depois));
+
+            if (eraMinha && m.antes != m.depois) {
+                lOrigem = m.l; cOrigem = m.c; pecaMovida = m.antes;
             }
-            if (m.antes != m.depois && m.depois != '.') {
-                lDest = m.l; cDest = m.c;
-                pecaCapturada = m.antes;
+            if (ehMinhaAgora && m.antes != m.depois) {
+                lDest = m.l; cDest = m.c; pecaCapturada = m.antes;
             }
         }
 
+        if (lOrigem == -1 || lDest == -1) return "NULL NULL";
+
+        // Ajuste para En Passant (peão moveu em diagonal, mas o destino não tinha peça)
+        if (tolower(pecaMovida) == 'p' && pecaCapturada == '.' && cOrigem != cDest) {
+            pecaCapturada = 'P'; // Forçamos para ele adicionar o 'x' de captura no PGN
+        }
+
+        // --- 3. MONTAR STRINGS E DESAMBIGUAÇÃO ---
         char colO = 'a' + cOrigem;  char linO = '8' - lOrigem;
         char colD = 'a' + cDest;    char linD = '8' - lDest;
 
         std::string uci = "";
         uci += colO; uci += linO; uci += colD; uci += linD;
 
+        // Se for promoção, adiciona no UCI (ex: e7e8q)
         if (tolower(pecaMovida) == 'p' && (lDest == 0 || lDest == 7)) {
             uci += tolower(bNovo[lDest][cDest]);
         }
 
-        // --- NOVA LÓGICA DE DESAMBIGUAÇÃO (A Correção!) ---
+        // Lógica de desambiguação (Raio-X para peças gémeas)
         bool conflitoColuna = false;
         bool conflitoLinha = false;
         char tipoPeca = toupper(pecaMovida);
@@ -341,16 +379,10 @@ public:
         if (tipoPeca != 'P' && tipoPeca != 'K') {
             for (int l = 0; l < 8; l++) {
                 for (int c = 0; c < 8; c++) {
-                    // Se achar uma peça idêntica (mesma letra/cor) noutra casa...
                     if ((l != lOrigem || c != cOrigem) && bAntigo[l][c] == pecaMovida) {
-                        // ...testa se ela também podia ter ido para a casa de destino
                         if (podeAlcancar(bAntigo, l, c, lDest, cDest, pecaMovida)) {
-                            if (c == cOrigem) {
-                                conflitoLinha = true; // Mesma coluna, difere pela linha (ex: R1h6)
-                            }
-                            else {
-                                conflitoColuna = true; // Colunas diferentes, difere pela coluna (ex: Rah6)
-                            }
+                            if (c == cOrigem) conflitoLinha = true;
+                            else conflitoColuna = true;
                         }
                     }
                 }
@@ -358,14 +390,12 @@ public:
         }
 
         std::string san = "";
-        bool captura = (pecaCapturada != '.' || mudancas.size() == 3);
+        bool captura = (pecaCapturada != '.');
 
         if (tipoPeca != 'P') {
             san += tipoPeca;
-            // Aplica a letra ou número extra para o Lichess não reclamar
             if (conflitoColuna) san += colO;
-            else if (conflitoLinha) san += linO;
-
+            if (conflitoLinha) san += linO;
             if (captura) san += "x";
         }
         else {
@@ -377,6 +407,12 @@ public:
 
         san += colD;
         san += linD;
+
+        // PGN da Promoção (ex: =Q)
+        if (tolower(pecaMovida) == 'p' && (lDest == 0 || lDest == 7)) {
+            san += "=";
+            san += toupper(bNovo[lDest][cDest]);
+        }
 
         return uci + " " + san;
     }
