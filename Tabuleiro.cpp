@@ -7,24 +7,27 @@ void Tabuleiro::calcularMovimentosPeao(int l, int c, std::vector<Lance>& lista) 
     char minhaPeca = matriz[l][c];
     char minhaCor = obterCorPeca(minhaPeca);
 
-    // 1. Define a direção e a linha inicial dependendo da cor
     int direcao = (minhaCor == 'w') ? -1 : 1;     // Brancas sobem (-1), Pretas descem (+1)
     int linhaInicial = (minhaCor == 'w') ? 6 : 1; // Onde o peão começa o jogo
 
     // --- MOVIMENTOS PARA A FRENTE ---
     int linhaFrente = l + direcao;
 
-    // Verifica se a casa da frente está dentro do tabuleiro e vazia
     if (posicaoValida(linhaFrente, c) && matriz[linhaFrente][c] == '.') {
-        Lance lanceFrente(l, c, linhaFrente, c, minhaPeca, '.');
-        lista.push_back(lanceFrente);
+        // VERIFICA PROMOÇÃO NO AVANÇO
+        if (linhaFrente == 0 || linhaFrente == 7) {
+            char prom = (minhaCor == 'w') ? 'Q' : 'q';
+            lista.push_back(Lance(l, c, linhaFrente, c, minhaPeca, '.', false, false, prom));
+        }
+        else {
+            lista.push_back(Lance(l, c, linhaFrente, c, minhaPeca, '.'));
 
-        // Se o passo simples é válido e estou na linha inicial, testo o passo duplo
-        if (l == linhaInicial) {
-            int linhaFrenteDupla = l + (2 * direcao);
-            if (matriz[linhaFrenteDupla][c] == '.') {
-                Lance lanceDuplo(l, c, linhaFrenteDupla, c, minhaPeca, '.');
-                lista.push_back(lanceDuplo);
+            // Passo duplo (só testamos se o passo simples for válido e não for promoção)
+            if (l == linhaInicial) {
+                int linhaFrenteDupla = l + (2 * direcao);
+                if (matriz[linhaFrenteDupla][c] == '.') {
+                    lista.push_back(Lance(l, c, linhaFrenteDupla, c, minhaPeca, '.'));
+                }
             }
         }
     }
@@ -39,37 +42,29 @@ void Tabuleiro::calcularMovimentosPeao(int l, int c, std::vector<Lance>& lista) 
             char pecaDestino = matriz[linhaFrente][colCaptura];
             char corDestino = obterCorPeca(pecaDestino);
 
-            // Captura Normal: Se tem um inimigo na diagonal
+            // Captura Normal
             if (corDestino != '.' && corDestino != minhaCor) {
-                Lance lanceCaptura(l, c, linhaFrente, colCaptura, minhaPeca, pecaDestino);
-                lista.push_back(lanceCaptura);
+                // VERIFICA PROMOÇÃO NA CAPTURA (Era aqui que estava a faltar!)
+                if (linhaFrente == 0 || linhaFrente == 7) {
+                    char prom = (minhaCor == 'w') ? 'Q' : 'q';
+                    lista.push_back(Lance(l, c, linhaFrente, colCaptura, minhaPeca, pecaDestino, false, false, prom));
+                }
+                else {
+                    lista.push_back(Lance(l, c, linhaFrente, colCaptura, minhaPeca, pecaDestino));
+                }
             }
-            // En Passant: Se a casa de destino for exatamente a coluna marcada pela regra
+            // Captura En Passant
+            // Captura En Passant
             else if (estado.colunaEnPassant == colCaptura) {
-                // O peão só pode fazer en passant se estiver na linha correta (linha 3 para brancas, 4 para pretas)
-                int linhaEnPassant = (minhaCor == 'w') ? 3 : 4;
-
-                if (l == linhaEnPassant) {
-                    // A peça capturada não está na casa de destino, está ao nosso lado!
-                    char peaoInimigo = (minhaCor == 'w') ? 'p' : 'P';
-                    Lance lanceEP(l, c, linhaFrente, colCaptura, minhaPeca, peaoInimigo, false, true, '.');
-                    // Dica: Seria ideal a sua struct 'Lance' ter um "bool ehEnPassant = false" 
-                    // para ajudar a função de desfazer o lance mais tarde!
-                    lista.push_back(lanceEP);
+                // Verifica se o peão está na linha correta (rank 5 para branco, rank 4 para preto)
+                if ((minhaCor == 'w' && l == 3) || (minhaCor == 'b' && l == 4)) {
+                    int linhaInimigo = l;
+                    char pecaInimiga = matriz[linhaInimigo][colCaptura];
+                    lista.push_back(Lance(l, c, linhaFrente, colCaptura, minhaPeca, pecaInimiga, false, true));
                 }
             }
         }
     }
-    /*if (posicaoValida(linhaFrente, c) && matriz[linhaFrente][c] == '.') {
-        if (linhaFrente == 0 || linhaFrente == 7) {
-            // Se chegar ao fim, cria o lance com a promoção para Dama ('Q')
-            char pecaProm = (minhaCor == 'w') ? 'Q' : 'q';
-            lista.push_back(Lance(l, c, linhaFrente, c, minhaPeca, '.', false, false, pecaProm));
-        }
-        else {
-            lista.push_back(Lance(l, c, linhaFrente, c, minhaPeca, '.'));
-        }
-    }*/
 }
 void Tabuleiro::calcularMovimentosCavalo(int l, int c, std::vector<Lance>& lista) {
     char minhaPeca = matriz[l][c];
@@ -384,58 +379,99 @@ bool Tabuleiro::reiEmXeque(char corRei) {
 }
 
 void Tabuleiro::fazerLanceInterno(const Lance& lance) {
-    // 1. Salvar o estado atual (a "fotografia" invisível)
+    // Guarda o estado para poder desfazer
     historicoEstados.push_back(estado);
 
-    // 2. Executar o movimento na matriz
-    if (lance.ehRoque) {
-        bool ehRoquePequeno = (lance.colDestino > lance.colOrigem);
-        int cFinalRei = ehRoquePequeno ? 6 : 2;
-        int cFinalTorre = ehRoquePequeno ? 5 : 3;
+    char pecaMovida = lance.pecaMovida;
+    char pecaCapturada = lance.pecaCapturada;
+    int linO = lance.linOrigem, colO = lance.colOrigem;
+    int linD = lance.linDestino, colD = lance.colDestino;
 
-        // Limpa as posições originais PRIMEIRO (essencial para o Xadrez 960)
-        matriz[lance.linOrigem][lance.colOrigem] = '.';
-        matriz[lance.linDestino][lance.colDestino] = '.';
+    // Remove a peça da origem
+    matriz[linO][colO] = '.';
 
-        // Coloca Rei e Torre nos destinos finais do Roque
-        matriz[lance.linOrigem][cFinalRei] = lance.pecaMovida;      // Rei
-        matriz[lance.linOrigem][cFinalTorre] = lance.pecaCapturada; // Torre
+    // Coloca a peça no destino (ou a peça promovida)
+    if (lance.pecaPromocao != '.') {
+        matriz[linD][colD] = lance.pecaPromocao;
     }
     else {
-        // Movimento normal ou Captura
-        matriz[lance.linDestino][lance.colDestino] = lance.pecaMovida;
-        matriz[lance.linOrigem][lance.colOrigem] = '.';
+        matriz[linD][colD] = pecaMovida;
+    }
 
-        // Lidar com a captura especial do En Passant
-        if (lance.ehEnPassant) {
-            matriz[lance.linOrigem][lance.colDestino] = '.'; // Remove o peão inimigo ao lado
+    // --- TRATAMENTO DO ROQUE ---
+    if (lance.ehRoque) {
+        // Move também a torre
+        bool roquePequeno = (colD > colO);
+        int colTorreOrigem, colTorreDestino;
+        if (roquePequeno) {
+            colTorreOrigem = 7;          // coluna 'h'
+            colTorreDestino = 5;         // coluna 'f'
+        }
+        else {
+            colTorreOrigem = 0;          // coluna 'a'
+            colTorreDestino = 3;         // coluna 'd'
+        }
+        matriz[linO][colTorreOrigem] = '.';
+        matriz[linO][colTorreDestino] = (turnoAtual == 'w') ? 'R' : 'r';
+    }
+
+    // --- TRATAMENTO DO EN PASSANT ---
+    if (lance.ehEnPassant) {
+        // O peão capturado está na mesma linha da origem, coluna de destino
+        matriz[linO][colD] = '.';
+    }
+
+    // --- ACTUALIZAÇÃO DOS DIREITOS DE ROQUE ---
+    // Se o rei se moveu, perdem-se ambos os roques dessa cor
+    if (tolower(pecaMovida) == 'k') {
+        if (turnoAtual == 'w') {
+            estado.roqueBrancoRei = false;
+            estado.roqueBrancoRainha = false;
+        }
+        else {
+            estado.roquePretoRei = false;
+            estado.roquePretoRainha = false;
         }
     }
-
-    // 3. Atualizar o Estado: En Passant
-    estado.colunaEnPassant = -1; // Desaparece por padrão
-    if ((lance.pecaMovida == 'P' || lance.pecaMovida == 'p') && abs(lance.linDestino - lance.linOrigem) == 2) {
-        estado.colunaEnPassant = lance.colOrigem; // Ativa se andou duas casas
+    // Se uma torre se moveu, perde-se o roque desse lado
+    if (tolower(pecaMovida) == 'r') {
+        if (turnoAtual == 'w') {
+            if (colO == 7) estado.roqueBrancoRei = false;
+            if (colO == 0) estado.roqueBrancoRainha = false;
+        }
+        else {
+            if (colO == 7) estado.roquePretoRei = false;
+            if (colO == 0) estado.roquePretoRainha = false;
+        }
+    }
+    // Se uma torre foi capturada na sua casa original, também se perde o roque
+    if (pecaCapturada == 'R') {
+        if (colD == 7) estado.roqueBrancoRei = false;
+        if (colD == 0) estado.roqueBrancoRainha = false;
+    }
+    else if (pecaCapturada == 'r') {
+        if (colD == 7) estado.roquePretoRei = false;
+        if (colD == 0) estado.roquePretoRainha = false;
     }
 
-    // 4. Atualizar o Estado: Direitos de Roque
-    // Se o Rei se mover, perde ambos os direitos de roque
-    if (lance.pecaMovida == 'K') { estado.roqueBrancoRei = false; estado.roqueBrancoRainha = false; }
-    if (lance.pecaMovida == 'k') { estado.roquePretoRei = false; estado.roquePretoRainha = false; }
+    // --- ACTUALIZAÇÃO DA COLUNA DE EN PASSANT ---
+    // Só fica activo se um peão avançou duas casas
+    if (tolower(pecaMovida) == 'p' && abs(linD - linO) == 2) {
+        estado.colunaEnPassant = colD;
+    }
+    else {
+        estado.colunaEnPassant = -1;
+    }
 
-    // Se uma torre se mover (ou for capturada nos seus cantos originais), perde esse lado específico
-    // (Avalia as 4 quinas do tabuleiro padrão para revogar direitos)
-    if (lance.linOrigem == 7 && lance.colOrigem == 7) estado.roqueBrancoRei = false;
-    if (lance.linOrigem == 7 && lance.colOrigem == 0) estado.roqueBrancoRainha = false;
-    if (lance.linOrigem == 0 && lance.colOrigem == 7) estado.roquePretoRei = false;
-    if (lance.linOrigem == 0 && lance.colOrigem == 0) estado.roquePretoRainha = false;
+    // --- ACTUALIZAÇÃO DO CONTADOR DE MEIAS-JOGADAS (regra dos 50 lances) ---
+    if (tolower(pecaMovida) == 'p' || pecaCapturada != '.') {
+        estado.meiaJogadas = 0;   // reset porque foi um avanço de peão ou captura
+    }
+    else {
+        estado.meiaJogadas++;
+    }
 
-    if (lance.linDestino == 7 && lance.colDestino == 7) estado.roqueBrancoRei = false;
-    if (lance.linDestino == 7 && lance.colDestino == 0) estado.roqueBrancoRainha = false;
-    if (lance.linDestino == 0 && lance.colDestino == 7) estado.roquePretoRei = false;
-    if (lance.linDestino == 0 && lance.colDestino == 0) estado.roquePretoRainha = false;
-
-    // 5. Trocar o turno
+    // ⬇️⬇️⬇️ MUDA O TURNO (aqui estava o problema) ⬇️⬇️⬇️
     turnoAtual = (turnoAtual == 'w') ? 'b' : 'w';
 }
 void Tabuleiro::desfazerLanceInterno(const Lance& lance) {

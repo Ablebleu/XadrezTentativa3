@@ -23,7 +23,7 @@ struct NoHistorico {
     }
 };
 
-// 2. SEGUNDO: Definimos a Lista (com o erro do copy-paste resolvido)
+// 2. SEGUNDO: Definimos a Lista
 class ListaPartida {
 public:
     NoHistorico* cabeca;
@@ -99,6 +99,7 @@ public:
     ~Jogo() {}
 
     void gameLoop() {
+        checaFinalizacao();
         while (1) {
             std::cout << "\n--- TURNO: " << tabuleiroJogo.getTurno() << " ---\n";
 
@@ -170,21 +171,25 @@ public:
                 } while (aguardandoDestino);
 
                 // Checagens de Fim de Jogo
-                if (tabuleiroJogo.ehXequeMate(tabuleiroJogo.getTurno())) {
-                    atualizarMapa(false);
-                    Simulacao::atualizarTabuleiro(tabuleiroBinario);
-                    std::cout << "\n*** XEQUE-MATE! O jogo acabou. ***\n";
-                    system("pause");
-                    return;
-                }
-                else if (tabuleiroJogo.ehEmpate(tabuleiroJogo.getTurno())) {
-                    atualizarMapa(false);
-                    Simulacao::atualizarTabuleiro(tabuleiroBinario);
-                    std::cout << "\n*** EMPATE! O jogo acabou. ***\n";
-                    system("pause");
-                    return;
-                }
+                checaFinalizacao();
             }
+        }
+    }
+
+    void checaFinalizacao() {
+        if (tabuleiroJogo.ehXequeMate(tabuleiroJogo.getTurno())) {
+            atualizarMapa(false);
+            Simulacao::atualizarTabuleiro(tabuleiroBinario);
+            std::cout << "\n*** XEQUE-MATE! ***\n";
+            system("pause");
+            return;
+        }
+        else if (tabuleiroJogo.ehEmpate(tabuleiroJogo.getTurno())) {
+            atualizarMapa(false);
+            Simulacao::atualizarTabuleiro(tabuleiroBinario);
+            std::cout << "\n*** EMPATE! ***\n";
+            system("pause");
+            return;
         }
     }
 
@@ -281,97 +286,37 @@ public:
         std::vector<std::string> bAntigo = expandirMatrizFen(fenAntiga);
         std::vector<std::string> bNovo = expandirMatrizFen(fenNova);
 
-        struct Mudanca { int l, c; char antes, depois; };
-        std::vector<Mudanca> mudancas;
+        int lOrigem = -1, cOrigem = -1, lDest = -1, cDest = -1;
+        char pecaMovida = '.', pecaNoDestino = '.';
 
-        // 1. Encontra todas as casas que sofreram alterações
+        // 1. Identifica o que mudou
         for (int l = 0; l < 8; l++) {
             for (int c = 0; c < 8; c++) {
-                if (bAntigo[l][c] != bNovo[l][c]) {
-                    mudancas.push_back({ l, c, bAntigo[l][c], bNovo[l][c] });
+                if (bAntigo[l][c] != '.' && bNovo[l][c] == '.') {
+                    lOrigem = l; cOrigem = c;
+                    pecaMovida = bAntigo[l][c];
+                }
+                else if (bNovo[l][c] != bAntigo[l][c] && bNovo[l][c] != '.') {
+                    lDest = l; cDest = c;
+                    pecaNoDestino = bNovo[l][c];
                 }
             }
         }
 
-        if (mudancas.empty()) return "NULL NULL";
+        if (lOrigem == -1 || lDest == -1) return "err err";
 
-        // De quem é a vez? (Lemos o 'w' ou 'b' diretamente da FEN antiga)
-        bool turnoBrancas = (fenAntiga.find(" w ") != std::string::npos);
-        char rei = turnoBrancas ? 'K' : 'k';
-        char torre = turnoBrancas ? 'R' : 'r';
-
-        // --- 1. DETECÇÃO DE ROQUE UNIVERSAL (CLÁSSICO E 960) ---
-        bool reiMudou = false;
-        bool torreMudou = false;
-        int cOrigemRei = -1, cOrigemTorre = -1, lRei = -1;
-
-        // Procura se o nosso Rei e a nossa Torre saíram das suas casas originais
-        for (auto& m : mudancas) {
-            if (m.antes == rei) { reiMudou = true; cOrigemRei = m.c; lRei = m.l; }
-            if (m.antes == torre) { torreMudou = true; cOrigemTorre = m.c; }
-        }
-
-        // Se ambos saíram de suas posições ao mesmo tempo, é Roque!
-        if (reiMudou && torreMudou && lRei != -1) {
-            // Se a torre estava à direita do rei, é roque curto. Se estava à esquerda, é longo.
-            bool roqueCurto = (cOrigemTorre > cOrigemRei);
-
-            char colO = 'a' + cOrigemRei;
-            char linO = '8' - lRei;
-
-            // Xadrez Clássico UCI: Rei vai para a casa final ('g' ou 'c').
-            char colD = roqueCurto ? 'g' : 'c';
-
-            // Xadrez 960 UCI: O formato oficial manda o Rei "capturar" a Torre (ex: b1a1).
-            // Se o Rei não estava na casa normal 'e' (coluna 4), usamos o UCI do 960.
-            if (cOrigemRei != 4) {
-                colD = 'a' + cOrigemTorre;
-            }
-
-            std::string uci = "";
-            uci += colO; uci += linO; uci += colD; uci += linO;
-
-            std::string san = roqueCurto ? "O-O" : "O-O-O";
-            return uci + " " + san;
-        }
-
-        // --- 2. LANCES NORMAIS, CAPTURAS E EN PASSANT ---
-        int lOrigem = -1, cOrigem = -1, lDest = -1, cDest = -1;
-        char pecaMovida = '.', pecaCapturada = '.';
-
-        // Procura elegantemente qual peça nossa desapareceu (Origem) e onde ela apareceu (Destino)
-        for (auto& m : mudancas) {
-            bool eraMinha = (turnoBrancas && isupper(m.antes)) || (!turnoBrancas && islower(m.antes));
-            bool ehMinhaAgora = (turnoBrancas && isupper(m.depois)) || (!turnoBrancas && islower(m.depois));
-
-            if (eraMinha && m.antes != m.depois) {
-                lOrigem = m.l; cOrigem = m.c; pecaMovida = m.antes;
-            }
-            if (ehMinhaAgora && m.antes != m.depois) {
-                lDest = m.l; cDest = m.c; pecaCapturada = m.antes;
-            }
-        }
-
-        if (lOrigem == -1 || lDest == -1) return "NULL NULL";
-
-        // Ajuste para En Passant (peão moveu em diagonal, mas o destino não tinha peça)
-        if (tolower(pecaMovida) == 'p' && pecaCapturada == '.' && cOrigem != cDest) {
-            pecaCapturada = 'P'; // Forçamos para ele adicionar o 'x' de captura no PGN
-        }
-
-        // --- 3. MONTAR STRINGS E DESAMBIGUAÇÃO ---
         char colO = 'a' + cOrigem;  char linO = '8' - lOrigem;
         char colD = 'a' + cDest;    char linD = '8' - lDest;
 
         std::string uci = "";
         uci += colO; uci += linO; uci += colD; uci += linD;
 
-        // Se for promoção, adiciona no UCI (ex: e7e8q)
-        if (tolower(pecaMovida) == 'p' && (lDest == 0 || lDest == 7)) {
-            uci += tolower(bNovo[lDest][cDest]);
+        // 2. Roque
+        if (tolower(pecaMovida) == 'k' && abs(cOrigem - cDest) > 1) {
+            return uci + (cDest > cOrigem ? " O-O" : " O-O-O");
         }
 
-        // Lógica de desambiguação (Raio-X para peças gémeas)
+        // 3. Desambiguação (Para não dar erro no Lichess com Torres e Cavalos)
         bool conflitoColuna = false;
         bool conflitoLinha = false;
         char tipoPeca = toupper(pecaMovida);
@@ -390,12 +335,18 @@ public:
         }
 
         std::string san = "";
-        bool captura = (pecaCapturada != '.');
+        bool captura = (bAntigo[lDest][cDest] != '.');
 
+        // Correção para captura En Passant
+        if (tipoPeca == 'P' && cOrigem != cDest && bAntigo[lDest][cDest] == '.') {
+            captura = true;
+        }
+
+        // 4. Montagem do SAN legível
         if (tipoPeca != 'P') {
             san += tipoPeca;
             if (conflitoColuna) san += colO;
-            if (conflitoLinha) san += linO;
+            else if (conflitoLinha) san += linO;
             if (captura) san += "x";
         }
         else {
@@ -408,10 +359,11 @@ public:
         san += colD;
         san += linD;
 
-        // PGN da Promoção (ex: =Q)
-        if (tolower(pecaMovida) == 'p' && (lDest == 0 || lDest == 7)) {
+        // 5. Promoção
+        if (tolower(pecaMovida) == 'p' && tolower(pecaNoDestino) != 'p') {
             san += "=";
-            san += toupper(bNovo[lDest][cDest]);
+            san += toupper(pecaNoDestino);
+            uci += tolower(pecaNoDestino);
         }
 
         return uci + " " + san;
